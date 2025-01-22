@@ -1,0 +1,117 @@
+
+
+-------------
+
+select * from  [RfmBook].[dbo].[Dataa]
+
+SELECT COUNT(DISTINCT CustomerID) AS ActiveCustomers
+FROM [RfmBook].[dbo].[Dataa] ;
+
+SELECT 
+    CustomerID,
+    COUNT(*) AS TransactionFrequency,          -- Frequency of transactions
+    SUM(totalsales) AS TotalSales,         -- Total sales for the customer
+    AVG(totalsales) AS AveragePurchaseSize -- Average purchase size
+FROM 
+    (select *, Quantity*unitprice as totalsales from [RfmBook].[dbo].[Dataa] ) as a
+GROUP BY 
+    CustomerID
+ORDER BY 
+    TotalSales DESC;   
+
+
+
+
+
+
+-------Calculate Recency ,Frequency ,Monetary Value 
+------New Code Deciling Based on Rfm Segemnatation
+
+
+WITH 
+RecencyCTE AS (
+    SELECT 
+        CustomerID,
+        DATEDIFF(DAY, MAX(CAST(InvoiceDate AS DATE)), GETDATE()) AS Recency
+    FROM [RfmBook].[dbo].[Dataa]
+    GROUP BY CustomerID
+),
+FrequencyCTE AS (
+    SELECT 
+        CustomerID,
+        COUNT(*) AS Frequency
+    FROM [RfmBook].[dbo].[Dataa]
+    GROUP BY CustomerID
+),
+MonetaryCTE AS (
+    SELECT 
+        CustomerID,
+        SUM(Quantity * UnitPrice) AS Monetary
+    FROM [RfmBook].[dbo].[Dataa]
+    GROUP BY CustomerID
+),
+
+-- Combine Recency, Frequency, and Monetary values
+RFM AS (
+    SELECT 
+        R.CustomerID,
+        NTILE(5) OVER (ORDER BY R.Recency ASC) AS RecencyScore, -- Lower recency is better, so we sort ascending
+        NTILE(5) OVER (ORDER BY F.Frequency DESC) AS FrequencyScore, -- Higher frequency is better, so we sort descending
+        NTILE(5) OVER (ORDER BY M.Monetary DESC) AS MonetaryScore, -- Higher monetary is better, so we sort descending
+        (NTILE(5) OVER (ORDER BY R.Recency ASC) + 
+         NTILE(5) OVER (ORDER BY F.Frequency DESC) + 
+         NTILE(5) OVER (ORDER BY M.Monetary DESC)) AS RFMScore
+    FROM 
+        RecencyCTE R
+    JOIN 
+        FrequencyCTE F ON R.CustomerID = F.CustomerID
+    JOIN 
+        MonetaryCTE M ON R.CustomerID = M.CustomerID
+),
+
+-- Classify based on Combined RFM Score Deciles
+RFMClassification AS (
+    SELECT 
+        CustomerID,
+        RecencyScore,
+        FrequencyScore,
+        MonetaryScore,
+        RFMScore,
+        CASE
+            WHEN RFMScore >= 12 THEN 'High Value'
+            WHEN RFMScore >= 10 THEN 'Medium Value'
+            WHEN RFMScore >= 6 THEN 'Low Value'
+            ELSE 'Dormant'
+        END AS SalesSegment
+    FROM RFM
+)
+
+-- Select final data combining customer segmentation and other details
+SELECT 
+    RFMClassification.CustomerID,
+    RFMClassification.RecencyScore,
+    RFMClassification.FrequencyScore,
+    RFMClassification.MonetaryScore,
+    RFMClassification.RFMScore,
+    RFMClassification.SalesSegment,
+    TS.TotalSales,
+    FREQ.Frequency,
+    FREQ.AvgPurchaseSize
+FROM 
+    RFMClassification
+LEFT JOIN (
+    SELECT 
+        CustomerID,
+        SUM(Quantity * UnitPrice) AS TotalSales
+    FROM [RfmBook].[dbo].[Dataa]
+    GROUP BY CustomerID
+) TS ON RFMClassification.CustomerID = TS.CustomerID
+LEFT JOIN (
+    SELECT 
+        CustomerID,
+        COUNT(*) AS Frequency, 
+        AVG(Quantity * UnitPrice) AS AvgPurchaseSize
+    FROM [RfmBook].[dbo].[Dataa]
+    GROUP BY CustomerID
+) FREQ ON RFMClassification.CustomerID = FREQ.CustomerID
+ORDER BY RFMClassification.RFMScore DESC;
